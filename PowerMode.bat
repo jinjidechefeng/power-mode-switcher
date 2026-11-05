@@ -874,6 +874,7 @@ function Show-Header {
     Write-Host ''
     Write-Host '  ============================================================' -ForegroundColor DarkCyan
     Write-Host '                     PowerMode  电源模式切换工具            ' -ForegroundColor Cyan
+    Write-Host '     github.com/jinjidechefeng/power-mode-switcher  © 车风    ' -ForegroundColor DarkGray
     Write-Host '  ============================================================ ' -ForegroundColor DarkCyan
 }
 
@@ -1135,6 +1136,9 @@ function Show-Help {
     Write-Host '    --yes             跳过确认提示，不等待回车（适合计划任务）'
     Write-Host ''
     Write-Host ('  配置文件: ' + $IniFile)
+    Write-Host '  仓库    : https://github.com/jinjidechefeng/power-mode-switcher'
+    Write-Host '  作者    : 车风'
+    Write-Host '  许可    : PolyForm Noncommercial 1.0.0（禁止商业使用）'
 }
 
 # ---------------------------------------------------------------- 入口分发
