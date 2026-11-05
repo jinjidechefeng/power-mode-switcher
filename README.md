@@ -9,25 +9,29 @@
                      PowerMode  电源模式切换工具
   ============================================================
 
-  时间     : 2026-11-05 11:31:18
-  电源     : 使用电池  33%  预计可用 40 分钟
+  时间     : 2026-11-05 13:22:06
+  电源     : 电池 33%  预计 2 小时 15 分钟
   电源计划 : 平衡
   屏幕     : 2560 x 1600 @ 240 Hz
-  可用刷新 : 60 / 144 / 240 Hz
-  息屏     : 接电源 20 分钟 / 电池 3 分钟
-  CPU 上限 : 接电源 100% / 电池 100%
-  电池节能 : 电量 ≤ 50% 时开启
-  屏幕色温 : 暖色（低蓝光）
-  显卡     : AMD Radeon 780M Graphics [集显 · 启用]
-             NVIDIA GeForce RTX 5060 Laptop GPU [独显 · 启用]
+  刷新率   : 60 / 144 / 240 Hz
+  息屏     : 接 20 分钟 / 电池 30 秒
+  CPU      : 接 100% / 电池 50%
+  节能     : 100%
+  色温     : 暖色
+  模式     : 极致续航
+  显卡     : AMD Radeon 780M Graphics（集显）
+             NVIDIA GeForce RTX 5060 Laptop GPU（独显，已禁用）
+  配置文件 : 默认
 
-  [1] 极致续航   30 秒息屏 + 节能 + 暖色屏幕 + 低刷新率 + 禁用独显
-  [2] 极致性能   最高刷新率 + CPU 满血 + 正常色温 + 启用独显
-  [3] 禁用独立显卡
+  [1] 极致续航
+  [2] 极致性能
+  [3] 启用独立显卡
   [4] 恢复原始设置
-  [5] 配置文件（PowerMode.ini）
+  [5] 配置文件
   [0] 退出
 ```
+
+状态栏只显示当前值。用电池时那一行是按**当前放电功率**估算的剩余时间：读取 `RemainingCapacity ÷ DischargeRate`（三次采样的平均值），不显示瓦数；拿不到放电功率时才退回系统自带的估算。
 
 ## 两种模式
 
@@ -124,6 +128,7 @@ PowerMode.bat --eco --yes
   * 虚拟：MuMu、VMware、Hyper-V、VirtualBox、Parsec、ToDesk、Sunlogin、Microsoft Remote/Basic Display 等
 * **电源设置**：直接读写 `HKLM\...\Power\User\PowerSchemes` 注册表，不解析本地化的 `powercfg /query` 输出，中英文系统都一样。
 * **电源模式**：优先用 `powercfg /overlaysetactive`（Win10 1709+ 的「最佳能效 / 最佳性能」），不支持时自动退回切换「节能 / 高性能」电源计划，并在恢复时切回原方案。
+* **剩余时间**：用 `root\wmi\BatteryStatus` 的 `RemainingCapacity ÷ DischargeRate` 估算，字段缺失或为 0 时退回 `PowerStatus.BatteryLifeRemaining`；没有电池的台式机上直接不显示。
 * **兼容旧备份**：能读取 v1 格式的 `backup.json`（`Items` / `Refresh` 字段）。
 
 ## 禁用独显的安全规则
