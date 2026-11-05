@@ -429,7 +429,7 @@ function Get-GammaState {
         if (-not [NativeDisplay]::GetDeviceGammaRamp($dc, $ramp)) { return '未知' }
         $rMax = [int]$ramp[255]
         $bMax = [int]$ramp[767]
-        if ($rMax -gt 0 -and $bMax -lt ($rMax * 0.8)) { return '暖色（低蓝光）' }
+        if ($rMax -gt 0 -and $bMax -lt ($rMax * 0.8)) { return '暖色' }
         return '正常'
     } finally {
         [void][NativeDisplay]::ReleaseDC([IntPtr]::Zero, $dc)
@@ -788,13 +788,85 @@ function Format-Seconds {
     return "$m 分 $sec 秒"
 }
 
-function Format-Remain {
-    param([int]$Seconds)
-    if ($Seconds -lt 0) { return '未知' }
-    $h = [int][Math]::Floor($Seconds / 3600)
-    $m = [int][Math]::Floor(($Seconds % 3600) / 60)
-    if ($h -gt 0) { return "$h 小时 $m 分钟" }
-    return "$m 分钟"
+function Format-Minutes {
+    param([int]$Minutes)
+    if ($Minutes -lt 0) { return '未知' }
+    if ($Minutes -lt 1) { return '不足 1 分钟' }
+    if ($Minutes -lt 60) { return "$Minutes 分钟" }
+    $h = [int][Math]::Floor($Minutes / 60)
+    $m = $Minutes % 60
+    if ($m -eq 0) { return "$h 小时" }
+    return "$h 小时 $m 分钟"
+}
+
+# 电池状态：百分比、是否接电、是否充电、按当前放电功率估算的剩余分钟数
+function Get-BatteryState {
+    $res = [pscustomobject]@{
+        Percent  = -1
+        OnAc     = $null
+        Charging = $false
+        Minutes  = -1
+    }
+
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        $ps = [System.Windows.Forms.SystemInformation]::PowerStatus
+        if (([int]$ps.BatteryChargeStatus -band 128) -eq 0) {
+            $res.Percent = [int][Math]::Round($ps.BatteryLifePercent * 100)
+        }
+    } catch { }
+
+    if ($res.Percent -lt 0) {
+        try {
+            $bat = @(Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop)
+            if ($bat.Count -gt 0) { $res.Percent = [int]$bat[0].EstimatedChargeRemaining }
+        } catch { }
+    }
+
+    $wmi = @()
+    try { $wmi = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryStatus -ErrorAction Stop) } catch { }
+
+    if ($wmi.Count -gt 0) {
+        if (@($wmi | Where-Object { $_.PowerOnline -eq $true }).Count -gt 0) { $res.OnAc = $true }
+        elseif (@($wmi | Where-Object { $_.PowerOnline -eq $false }).Count -gt 0) { $res.OnAc = $false }
+        if (@($wmi | Where-Object { $_.Charging -eq $true }).Count -gt 0) { $res.Charging = $true }
+        elseif ((($wmi | Measure-Object -Property ChargeRate -Sum -ErrorAction SilentlyContinue).Sum) -gt 0) { $res.Charging = $true }
+    } else {
+        try {
+            $ps2 = [System.Windows.Forms.SystemInformation]::PowerStatus
+            if ([int]$ps2.PowerLineStatus -eq 1) { $res.OnAc = $true }
+            elseif ([int]$ps2.PowerLineStatus -eq 0) { $res.OnAc = $false }
+        } catch { }
+    }
+
+    # 剩余容量 / 当前放电功率 = 剩余时间；取三次采样的平均值削掉抖动
+    if ($wmi.Count -gt 0 -and $res.OnAc -ne $true -and -not $res.Charging) {
+        $rates = @()
+        $capacity = 0
+        for ($k = 0; $k -lt 3; $k++) {
+            $sample = @()
+            try { $sample = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryStatus -ErrorAction Stop) } catch { }
+            $rate = ($sample | Measure-Object -Property DischargeRate -Sum -ErrorAction SilentlyContinue).Sum
+            $cap  = ($sample | Measure-Object -Property RemainingCapacity -Sum -ErrorAction SilentlyContinue).Sum
+            if ($rate -gt 0) { $rates += [double]$rate }
+            if ($cap -gt 0) { $capacity = [double]$cap }
+            if ($k -lt 2) { Start-Sleep -Milliseconds 250 }
+        }
+        if ($rates.Count -gt 0 -and $capacity -gt 0) {
+            $avg = ($rates | Measure-Object -Average).Average
+            if ($avg -gt 0) { $res.Minutes = [int][Math]::Round($capacity / $avg * 60) }
+        }
+    }
+
+    # 拿不到放电功率时退回系统估算
+    if ($res.Minutes -lt 0 -and $res.OnAc -ne $true) {
+        try {
+            $ps3 = [System.Windows.Forms.SystemInformation]::PowerStatus
+            if ($ps3.BatteryLifeRemaining -gt 0) { $res.Minutes = [int][Math]::Round($ps3.BatteryLifeRemaining / 60) }
+        } catch { }
+    }
+
+    return $res
 }
 
 # ---------------------------------------------------------------- 状态
@@ -809,39 +881,27 @@ function Show-Status {
     $primary = Get-PrimaryDisplay
     $info = Get-DeviceCurrent $primary.Name
     $scheme = Get-ActiveSchemeGuid
+    $bat = Get-BatteryState
 
-    $acText = '未知'; $pctText = ''; $remainText = ''
-    try {
-        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-        $ps = [System.Windows.Forms.SystemInformation]::PowerStatus
-        $lineStatus = [int]$ps.PowerLineStatus
-        if ($lineStatus -eq 1) { $acText = '已接通电源' }
-        elseif ($lineStatus -eq 0) { $acText = '使用电池' }
-        else {
-            $batInfo = Get-CimInstance -ClassName Win32_Battery -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($batInfo) {
-                if ([int]$batInfo.BatteryStatus -eq 2) { $acText = '已接通电源' } else { $acText = '使用电池' }
-            }
-        }
-
-        $cs = [int]$ps.BatteryChargeStatus
-        if (($cs -band 128) -ne 0) {
-            $pctText = '（无电池）'
-        } else {
-            $pctText = "$([int][Math]::Round($ps.BatteryLifePercent * 100))%"
-            if (($cs -band 8) -ne 0) { $pctText = $pctText + ' 充电中' }
-            if ($ps.BatteryLifeRemaining -gt 0) { $remainText = '  预计可用 ' + (Format-Remain ([int]$ps.BatteryLifeRemaining)) }
-        }
-    } catch { }
+    $pctText = if ($bat.Percent -ge 0) { "$($bat.Percent)%" } else { '' }
+    if ($bat.OnAc -eq $true) {
+        $powerText = ('插电 ' + $pctText).Trim()
+        if ($bat.Charging) { $powerText += ' 充电中' }
+    } elseif ($bat.OnAc -eq $false) {
+        $powerText = ('电池 ' + $pctText).Trim()
+        if ($bat.Minutes -ge 0) { $powerText += '  预计 ' + (Format-Minutes $bat.Minutes) }
+    } else {
+        if ($pctText) { $powerText = $pctText } else { $powerText = '无电池' }
+    }
 
     $resText = '未知'
     if ($info) { $resText = "$($info.Width) x $($info.Height) @ $($info.Freq) Hz" }
     $devCount = @(Get-DisplayDevices).Count
-    if ($devCount -gt 1) { $resText = $resText + "（共 $devCount 块屏幕）" }
+    if ($devCount -gt 1) { $resText += " ×$devCount" }
 
     $freqs = @(Get-DisplayFreqList $primary.Name)
     $freqText = '未知'
-    if ($freqs -and $freqs.Count -gt 0) { $freqText = ($freqs -join ' / ') + ' Hz' }
+    if ($freqs.Count -gt 0) { $freqText = ($freqs -join ' / ') + ' Hz' }
 
     $monAc = Get-PowerValue -Sub $SUB_VIDEO -Setting $SET_VIDEOIDLE -Ac $true
     $monDc = Get-PowerValue -Sub $SUB_VIDEO -Setting $SET_VIDEOIDLE -Ac $false
@@ -855,9 +915,9 @@ function Show-Status {
     if ($null -ne $cpuAc) { $cpuAcTxt = "$cpuAc%" }
     if ($null -ne $cpuDc) { $cpuDcTxt = "$cpuDc%" }
 
-    if ($null -eq $esDc) { $esText = '系统默认' }
-    elseif ($esDc -ge 100) { $esText = '电量 ≤ 100% 时始终开启' }
-    else { $esText = "电量 ≤ $esDc% 时开启" }
+    if ($null -eq $esDc) { $esText = '默认' }
+    elseif ($esDc -ge 100) { $esText = '100%' }
+    else { $esText = "$esDc%" }
 
     $modeText = '未设置'
     if (Test-Path -LiteralPath $ModeFile) {
@@ -868,28 +928,28 @@ function Show-Status {
 
     Write-Host ''
     Write-Host ('  时间     : ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
-    Write-Host ('  电源     : ' + $acText + '  ' + $pctText + $remainText)
+    Write-Host ('  电源     : ' + $powerText)
     Write-Host ('  电源计划 : ' + (Get-SchemeName $scheme))
     Write-Host ('  屏幕     : ' + $resText)
-    Write-Host ('  可用刷新 : ' + $freqText)
-    Write-Host ('  息屏     : 接电源 ' + $monAcTxt + ' / 电池 ' + $monDcTxt)
-    Write-Host ('  CPU 上限 : 接电源 ' + $cpuAcTxt + ' / 电池 ' + $cpuDcTxt)
-    Write-Host ('  电池节能 : ' + $esText)
-    Write-Host ('  屏幕色温 : ' + (Get-GammaState))
+    Write-Host ('  刷新率   : ' + $freqText)
+    Write-Host ('  息屏     : 接 ' + $monAcTxt + ' / 电池 ' + $monDcTxt)
+    Write-Host ('  CPU      : 接 ' + $cpuAcTxt + ' / 电池 ' + $cpuDcTxt)
+    Write-Host ('  节能     : ' + $esText)
+    Write-Host ('  色温     : ' + (Get-GammaState))
+    Write-Host ('  模式     : ' + $modeText) -ForegroundColor Green
 
-    $gpus = @(Get-GpuInfo)
+    $gpus = @(Get-GpuInfo | Where-Object { $_.Enabled -or $_.Kind -ne 'virtual' })
     $first = $true
     foreach ($g in $gpus) {
-        $state = if ($g.Enabled) { '启用' } else { '已禁用' }
-        $line = "  $($g.Name) [$((Get-KindText $g.Kind)) · $state]"
-        if ($first) { Write-Host ('  显卡     : ' + $line.TrimStart()); $first = $false }
-        else { Write-Host ('             ' + $line.TrimStart()) }
+        $kind = Get-KindText $g.Kind
+        $line = if ($g.Enabled) { "$($g.Name)（$kind）" } else { "$($g.Name)（$kind，已禁用）" }
+        if ($first) { Write-Host ('  显卡     : ' + $line); $first = $false }
+        else { Write-Host ('             ' + $line) }
     }
     if ($first) { Write-Host '  显卡     : 未检测到' }
 
-    $cfgText = if ($Script:CfgLoaded) { 'PowerMode.ini（已加载）' } else { '内置默认值' }
+    $cfgText = if ($Script:CfgLoaded) { 'PowerMode.ini' } else { '默认' }
     Write-Host ('  配置文件 : ' + $cfgText)
-    Write-Host ('  当前模式 : ' + $modeText) -ForegroundColor Green
 }
 
 # ---------------------------------------------------------------- 模式
@@ -938,8 +998,8 @@ function Invoke-EcoMode {
     }
 
     if ($Script:Cfg.EcoWarmScreen) {
-        if (Set-GammaWarm) { Write-Ok '屏幕色温' '暖色（低蓝光）' }
-        else { Write-Warn '屏幕色温' '设置失败（HDR 模式或显卡驱动不支持）' }
+        if (Set-GammaWarm) { Write-Ok '屏幕色温' '暖色' }
+        else { Write-Warn '屏幕色温' '设置失败（HDR 或驱动不支持）' }
     }
 
     if ($Script:Cfg.EcoDisableGpu) { Invoke-GpuOff -SkipConfirm $Script:Yes | Out-Null }
@@ -1128,13 +1188,13 @@ switch ($Cmd) {
             Write-Host ''
 
             $gpuOffByUs = (@(Get-RecordedGpus).Count -gt 0)
-            $gpuLabel = if ($gpuOffByUs) { '启用独立显卡（当前已禁用）' } else { '禁用独立显卡' }
+            $gpuLabel = if ($gpuOffByUs) { '启用独立显卡' } else { '禁用独立显卡' }
 
-            Write-Host '  [1] 极致续航   30 秒息屏 + 节能 + 暖色屏幕 + 低刷新率 + 禁用独显' -ForegroundColor Green
-            Write-Host '  [2] 极致性能   最高刷新率 + CPU 满血 + 正常色温 + 启用独显' -ForegroundColor Yellow
+            Write-Host '  [1] 极致续航' -ForegroundColor Green
+            Write-Host '  [2] 极致性能' -ForegroundColor Yellow
             Write-Host ("  [3] " + $gpuLabel) -ForegroundColor Magenta
             Write-Host '  [4] 恢复原始设置' -ForegroundColor Gray
-            Write-Host '  [5] 配置文件（PowerMode.ini）' -ForegroundColor DarkGray
+            Write-Host '  [5] 配置文件' -ForegroundColor DarkGray
             Write-Host '  [0] 退出' -ForegroundColor DarkGray
             Write-Host ''
             $choice = Read-Host '  请输入数字并回车'
