@@ -2,6 +2,8 @@
 
 一个单文件 `.bat` 小工具：显示当前电源 / 显示 / 显卡状态，一键在「极致续航」和「极致性能」两种模式间切换，并可完整还原原始设置。
 
+**作者**：车风 · **仓库**：<https://github.com/jinjidechefeng/power-mode-switcher>
+
 不需要安装任何东西，双击即可运行（会自动申请管理员权限）。
 
 ```
@@ -150,6 +152,20 @@ PowerMode.bat --eco --yes
 * 「最佳能效 / 最佳性能」依赖电源模式叠加，少数 OEM 定制系统不支持，此时自动退回电源计划切换。
 * 极致性能模式把 CPU 下限锁 100% 会让笔记本风扇变吵、温度变高，介意就用 `[4]` 还原。
 
-## License
+## 作者与许可
 
-MIT
+作者：**车风**  
+仓库：<https://github.com/jinjidechefeng/power-mode-switcher>
+
+本项目使用 [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0)，**仅限非商业用途**：
+
+- 允许：个人使用、学习研究、业余项目、慈善 / 教育 / 公共研究 / 政府机构使用，以及修改和再分发（需保留协议与署名）
+- 不允许：任何商业用途，包括在公司内用于生产环境、作为付费服务的一部分、随商业产品分发等
+- 商业授权请联系作者
+
+```
+Required Notice: Copyright (c) 2026 车风
+https://github.com/jinjidechefeng/power-mode-switcher
+```
+
+软件按「现状」提供，不附带任何担保。
